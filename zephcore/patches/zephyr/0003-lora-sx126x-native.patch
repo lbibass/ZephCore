@@ -90,29 +90,20 @@ index 7b0b67f89d5..49b0a563138 100644
  }
  
  static int sx126x_set_sync_word(const struct device *dev, bool public_network)
-@@ -245,8 +267,24 @@ static int sx126x_set_sync_word(const struct device *dev, bool public_network)
+@@ -245,8 +267,15 @@ static int sx126x_set_sync_word(const struct device *dev, bool public_network)
  static int sx126x_set_rx_gain(const struct device *dev, bool boosted)
  {
  	uint8_t val = boosted ? SX126X_RX_GAIN_BOOSTED : SX126X_RX_GAIN_POWER_SAVING;
-+	int ret;
-+
-+	ret = sx126x_hal_write_regs(dev, SX126X_REG_RX_GAIN, &val, 1);
-+	if (ret < 0) {
-+		return ret;
-+	}
  
 -	return sx126x_hal_write_regs(dev, SX126X_REG_RX_GAIN, &val, 1);
-+	/* Add RX gain register to retention list (DS §9.6) so the chip
-+	 * preserves the setting across mode transitions.  Without this,
-+	 * register 0x08AC resets to power-saving on every SetRx. */
-+	const uint8_t retention[] = {
-+		0x01,
-+		(uint8_t)(SX126X_REG_RX_GAIN >> 8),
-+		(uint8_t)(SX126X_REG_RX_GAIN & 0xFF),
-+	};
-+
-+	return sx126x_hal_write_regs(dev, SX126X_REG_RX_GAIN_RETENTION_0,
-+				     retention, sizeof(retention));
++	/* Retention NOT used: without writing SX126X_REG_RX_GAIN_RETENTION_0,
++	 * the chip resets 0x08AC to power-saving (0x94) on every SetRx command.
++	 * This clears any residual AGC state accumulated during strong-signal
++	 * reception (near-far problem: strong first relay locks AGC, weaker
++	 * second relay missed).  sx126x_restart_rx() and hwStartReceive() both
++	 * re-apply the desired gain after SetRx, after BUSY goes low and before
++	 * any preamble can arrive (~3.4 ms RC startup window). */
++	return sx126x_hal_write_regs(dev, SX126X_REG_RX_GAIN, &val, 1);
  }
  
  static int sx126x_set_tx(const struct device *dev, uint32_t timeout_ms)
@@ -189,7 +180,7 @@ index 7b0b67f89d5..49b0a563138 100644
  }
  
  static void sx126x_set_rf_path(const struct device *dev, bool enable, bool tx)
-@@ -405,11 +475,107 @@ static void sx126x_set_rf_path(const struct device *dev, bool enable, bool tx)
+@@ -405,11 +475,114 @@ static void sx126x_set_rf_path(const struct device *dev, bool enable, bool tx)
  	const struct sx126x_hal_config *config = dev->config;
  
  	sx126x_hal_set_antenna_enable(dev, enable);
@@ -291,8 +282,15 @@ index 7b0b67f89d5..49b0a563138 100644
 +		sx126x_hal_write_cmd(dev, SX126X_CMD_SET_RX, buf, 3);
 +	}
 +
-+	/* RX gain is preserved by hardware retention registers (§9.6) —
-+	 * no need to re-apply on every restart. */
++	/* Re-apply RX gain: SetRx resets 0x08AC to power-saving without retention.
++	 * sx126x_hal_write_cmd() above waits for BUSY before issuing the command;
++	 * sx126x_hal_write_regs() below also waits for BUSY (the ~3.4 ms RC startup
++	 * after SetRx) before writing.  The gain is therefore applied after the radio
++	 * has entered RX but before any preamble can arrive — giving a clean AGC
++	 * state for each new packet regardless of the previous packet's signal level. */
++	uint8_t gain = data->rx_boost_enabled ? SX126X_RX_GAIN_BOOSTED
++					      : SX126X_RX_GAIN_POWER_SAVING;
++	sx126x_hal_write_regs(dev, SX126X_REG_RX_GAIN, &gain, 1);
 +}
 +
  static int sx126x_set_sleep(const struct device *dev)

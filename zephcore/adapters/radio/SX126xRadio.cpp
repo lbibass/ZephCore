@@ -51,8 +51,11 @@ void SX126xRadio::hwStartReceive()
 	}
 	atomic_set(&_in_recv_mode, 1);
 
-	/* RX boost: set once via setRxBoost(), preserved by SX126x
-	 * hardware retention registers (DS §9.6). */
+	/* Re-apply RX gain after lora_recv_async(): without retention registers,
+	 * SetRx issued internally by the driver resets gain to power-saving (0x94).
+	 * sx126x_restart_rx() does the same on every subsequent RxDone restart. */
+	sx126x_set_rx_boost(_dev, _rx_boost_enabled);
+
 	if (_rx_duty_cycle_enabled) {
 		sx126x_set_rx_duty_cycle(_dev, true);
 	}
